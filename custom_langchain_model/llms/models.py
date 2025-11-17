@@ -11,6 +11,8 @@ from langchain_core.messages import (
     HumanMessage,
     BaseMessage,
     ChatMessage,
+    SystemMessage,
+    ToolMessage
 )
 from langchain_core.tools import BaseTool
 from langchain_core.runnables import RunnableConfig, Runnable
@@ -32,16 +34,43 @@ class AzureOpenAICompatibleChat(BaseChatModel):
         self.endpoint = settings.API_BASE_URL.format(model=self.engine)
 
 
-    def _prepare_messages(self, messages: List[ChatMessage]) -> Dict[str, Any]:
+    def _prepare_messages(self, messages: List[ChatMessage]) -> dict:
+        """
+        Convert LangChain messages to Azure OpenAI Chat API format.
+        This includes handling tool calls in AI messages and route
+        tool results back to the API for further AI interpretation.
+        """
         payload_messages = []
         for msg in messages:
+            message_dict = {"content": msg.content or ""}
+            
+            # determine role and other fields
             if isinstance(msg, HumanMessage):
-                role = "user"
+                message_dict["role"] = "user"                
             elif isinstance(msg, AIMessage):
-                role = "assistant"
+                message_dict["role"] = "assistant"
+                if getattr(msg, "tool_calls", None):
+                    # Convert tool_calls to Azure OpenAI format
+                    # Each call must include an id and function info
+                    message_dict["tool_calls"] = []
+                    for call in msg.tool_calls:
+                        message_dict["tool_calls"].append({
+                            "id": call["id"],
+                            "type": "function", 
+                            "function": {
+                                "name": call["name"],
+                                "arguments": json.dumps(call["args"]),
+                            }
+                        })            
+            elif isinstance(msg, SystemMessage):
+                message_dict["role"] = "system"                
+            elif isinstance(msg, ToolMessage):
+                message_dict["role"] = "tool"
+                message_dict["name"] = msg.name
+                message_dict["tool_call_id"] = msg.tool_call_id
             else:
-                role = "system"
-            payload_messages.append({"role": role, "content": msg.content})
+                raise ValueError(f"Unsupported message type: {type(msg)}")            
+            payload_messages.append(message_dict)
         return payload_messages
 
 
